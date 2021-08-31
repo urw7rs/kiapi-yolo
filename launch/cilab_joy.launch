@@ -1,0 +1,10 @@
+<launch>
+    <param name="use_sim_time" value="false"/>
+
+    <node name="joy_node" pkg="joy" type="joy_node" output="screen" respawn="false"/>
+    <node name="cilab_twist_joy" pkg="cilab_ctl" type="cilab_twist_joy.py" output="screen" respawn="false">
+	<param name="x_speed_scale"  value="1.2" />
+	<param name="w_speed_scale"  value="0.7" />
+	<remap from="cmd_vel" to="cmd_vel"/>	
+    </node>
+</launch>
