@@ -164,7 +164,7 @@ class Follower:
             green_res = cv2.morphologyEx(green_res, cv2.MORPH_OPEN, kernel)
             green_res = cv2.dilate(green_res, kernel, iterations=5)
             green_result = self.find_circle(green_res, 1)
-            cv2.imshow('green', green_res)
+            #cv2.imshow('green', green_res)
 
         else: # Green Light
             self.remove_yellow(color_img)
