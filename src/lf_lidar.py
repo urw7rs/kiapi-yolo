@@ -7,11 +7,6 @@ import numpy as np
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, LaserScan
 
-past_ang = 0
-angle_step_deg = 20
-lidar_count = 0
-light_state = False  # red=False, green=True
-
 
 class Follower:
     perr = 0
@@ -19,7 +14,7 @@ class Follower:
     dt = 0
     past_ang = 0
     lidar_count = 0
-    light_state = False
+    light_state = False  # red=False, green=True
 
     def __init__(self, width=320, height=240, angle_step_deg=20):
         self.bridge = cv_bridge.CvBridge()
@@ -64,7 +59,8 @@ class Follower:
             return 0
 
         # dynamic offset
-        # lateral_dists = [dist * numpy.cos(numpy.deg2rad(theta)) for dist, theta in zip(self.dists, self.ray_angle)]
+        # lateral_dists = [dist * numpy.cos(numpy.deg2rad(theta))
+        # for dist, theta in zip(self.dists, self.ray_angle)]
 
         # static offset
         lateral_count = 0
@@ -164,6 +160,7 @@ class Follower:
         color_img = cv2.resize(
             color_img, dsize=(self.width, self.height), interpolation=cv2.INTER_AREA
         )
+
         if light_state == False:  # Red Light
             hsv = cv2.cvtColor(color_img, cv2.COLOR_BGR2HSV)
             sen = 15
