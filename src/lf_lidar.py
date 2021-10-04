@@ -7,15 +7,13 @@ import numpy as np
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, LaserScan
 
-past_ang = 0
-angle_step_deg = 20
-
 
 class Follower:
     perr = 0
     ptime = 0
     dt = 0
     past_ang = 0
+    lidar_count = 0
 
     def __init__(self, width=320, height=240, angle_step_deg=20):
         self.bridge = cv_bridge.CvBridge()
@@ -36,8 +34,7 @@ class Follower:
         self.height = height
         self.width = width
 
-        pts1 = np.float32([(123, 355), (491, 359), (30, 456), (624, 448)])
-        pts1 = pts1 / 2
+        pts1 = np.float32([(61, 177), (209, 179), (15, 228), (312, 224)])
         pts2 = np.float32(
             [[5, 5], [width - 5, 5], [5, height - 5], [width - 5, height - 5]]
         )
@@ -61,7 +58,8 @@ class Follower:
             return 0
 
         # dynamic offset
-        # lateral_dists = [dist * numpy.cos(numpy.deg2rad(theta)) for dist, theta in zip(self.dists, self.ray_angle)]
+        # lateral_dists = [dist * numpy.cos(numpy.deg2rad(theta))
+        # for dist, theta in zip(self.dists, self.ray_angle)]
 
         # static offset
         lateral_count = 0
@@ -70,12 +68,23 @@ class Follower:
                 lateral_count += 1
         if lateral_count >= 4:
             print("lateral_cnt :{}".format(lateral_count))
+            self.lidar_count += 1
             return 10
         else:
-            return 0
+            if self.lidar_count:
+                self.lidar_count -= 1
+                return -10
+            else:
+                return 0
 
     # dynamic offset
     # return sum(lateral_dists)
+    def remove_yellow(self, dst):
+        hsv = cv2.cvtColor(dst, cv2.COLOR_BGR2HSV)
+        lower_yello = np.array([15, 30, 30])
+        upper_yello = np.array([65, 255, 255])
+        mask = cv2.inRange(hsv, lower_yello, upper_yello)
+        dst[mask > 0] = (0, 0, 0)
 
     def draw_direction(self, dst, steer_angle):
         height, width = dst.shape[:2]
@@ -128,10 +137,12 @@ class Follower:
         color_img = cv2.resize(
             color_img, dsize=(self.width, self.height), interpolation=cv2.INTER_AREA
         )
+        self.remove_yellow(color_img)
+
         blue, green, red = cv2.split(color_img)
 
         # perspective transform
-        roi = cv2.warpPerspective(red, self.M, (width, height))
+        roi = cv2.warpPerspective(red, self.M, (self.width, self.height))
 
         # debugging
         # cv2.imshow("dst", img_result)
@@ -145,9 +156,8 @@ class Follower:
         )
 
         # Canny Edge
-        ret, roi = cv2.threshold(roi, 210, 255, cv2.THRESH_BINARY)
 
-        dst = cv2.Canny(roi_img, 40, 200, None, 3)
+        dst = cv2.Canny(roi, 40, 200, None, 3)
 
         # get hough line
         linesP = cv2.HoughLinesP(dst, 1, np.pi / 180, 4, None, 22, 2)
@@ -172,14 +182,15 @@ class Follower:
                         * 180
                     )
 
-                    draw_line = lambda c: cv2.line(
-                        dst,
-                        (line[0], line[1]),
-                        (line[2], line[3]),
-                        c,
-                        3,
-                        cv2.LINE_AA,
-                    )
+                    def draw_line(color):
+                        cv2.line(
+                            dst,
+                            (line[0], line[1]),
+                            (line[2], line[3]),
+                            color,
+                            3,
+                            cv2.LINE_AA,
+                        )
 
                     if slope >= 5:
                         draw_line((0, 255, 255))
