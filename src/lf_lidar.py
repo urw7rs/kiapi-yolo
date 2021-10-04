@@ -9,16 +9,18 @@ from sensor_msgs.msg import Image, LaserScan
 
 past_ang = 0
 angle_step_deg = 20
-lidar_count=0
-light_state=False # red=False, green=True
+lidar_count = 0
+light_state = False  # red=False, green=True
+
 
 class Follower:
     perr = 0
     ptime = 0
     dt = 0
     past_ang = 0
-    lidar_count=0
-    light_state=False
+    lidar_count = 0
+    light_state = False
+
     def __init__(self, width=320, height=240, angle_step_deg=20):
         self.bridge = cv_bridge.CvBridge()
         self.image_sub = rospy.Subscriber(
@@ -71,18 +73,18 @@ class Follower:
                 lateral_count += 1
         if lateral_count >= 4:
             print("lateral_cnt :{}".format(lateral_count))
-            self.lidar_count+=1
+            self.lidar_count += 1
             return 10
         else:
             if self.lidar_count:
-                self.lidar_count-=1
+                self.lidar_count -= 1
                 return -10
             else:
                 return 0
 
     # dynamic offset
     # return sum(lateral_dists)
-    def remove_yellow(self,dst):
+    def remove_yellow(self, dst):
         hsv = cv2.cvtColor(dst, cv2.COLOR_BGR2HSV)
         lower_yello = np.array([15, 30, 30])
         upper_yello = np.array([65, 255, 255])
@@ -137,13 +139,22 @@ class Follower:
         img = cv2.medianBlur(res, 5)
         ccimg = cv2.cvtColor(img, cv2.COLOR_HSV2BGR)
         cimg = cv2.cvtColor(ccimg, cv2.COLOR_BGR2GRAY)
-        circles = cv2.HoughCircles(cimg, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=1, minRadius=1, maxRadius=200)
+        circles = cv2.HoughCircles(
+            cimg,
+            cv2.HOUGH_GRADIENT,
+            1,
+            20,
+            param1=50,
+            param2=1,
+            minRadius=1,
+            maxRadius=200,
+        )
         if circles is not None:
             if light_color == 1:
-                print('Green Circle Found')
-                light_state=True
+                print("Green Circle Found")
+                light_state = True
             if light_color == 2:
-                print('RED Circle')  #Useless
+                print("RED Circle")  # Useless
             circles = np.uint16(np.around(circles))
         return cimg
 
@@ -153,7 +164,7 @@ class Follower:
         color_img = cv2.resize(
             color_img, dsize=(self.width, self.height), interpolation=cv2.INTER_AREA
         )
-        if light_state==False: #Red Light
+        if light_state == False:  # Red Light
             hsv = cv2.cvtColor(color_img, cv2.COLOR_BGR2HSV)
             sen = 15
             lower_green = np.array([48 - sen, 100, 100])
@@ -164,9 +175,9 @@ class Follower:
             green_res = cv2.morphologyEx(green_res, cv2.MORPH_OPEN, kernel)
             green_res = cv2.dilate(green_res, kernel, iterations=5)
             green_result = self.find_circle(green_res, 1)
-            #cv2.imshow('green', green_res)
+            # cv2.imshow('green', green_res)
 
-        else: # Green Light
+        else:  # Green Light
             self.remove_yellow(color_img)
             blue, green, red = cv2.split(color_img)
             # perspective transform
@@ -175,7 +186,7 @@ class Follower:
             # cv2.imshow("dst", img_result)
 
             roi[: int(self.height / 4), :] = 0
-            roi[int(self.height * 3 / 4):, :] = 0
+            roi[int(self.height * 3 / 4) :, :] = 0
 
             # Opening
             roi = cv2.morphologyEx(
@@ -270,7 +281,6 @@ class Follower:
             err += steer_angle
             err -= self.get_obstacle_threshold()
             err /= 2
-
 
             K_p = 0.009
             K_d = 0.2
