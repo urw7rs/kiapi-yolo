@@ -15,6 +15,7 @@ class Follower:
     past_ang = 0
     lidar_count = 0
     light_state = False  # red=False, green=True
+    serr = 0
 
     def __init__(self, width=320, height=240, angle_step_deg=20):
         self.bridge = cv_bridge.CvBridge()
@@ -24,7 +25,6 @@ class Follower:
         self.lidar_sub = rospy.Subscriber("/scan_raw", LaserScan, self.lidar_callback)
         self.cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.image_pub = rospy.Publisher("/lane_image", Image, queue_size=1)
-
         self.twist = Twist()
 
         self.ray_angle = [x for x in range(angle_step_deg, 180, angle_step_deg)]
@@ -131,7 +131,7 @@ class Follower:
         output_img = self.bridge.cv2_to_imgmsg(dst)
         self.image_pub.publish(output_img)
 
-    def find_circle(res, light_color):
+    def find_circle(self, res, light_color):
         img = cv2.medianBlur(res, 5)
         ccimg = cv2.cvtColor(img, cv2.COLOR_HSV2BGR)
         cimg = cv2.cvtColor(ccimg, cv2.COLOR_BGR2GRAY)
@@ -148,11 +148,11 @@ class Follower:
         if circles is not None:
             if light_color == 1:
                 print("Green Circle Found")
-                light_state = True
+                self.light_state = True
             if light_color == 2:
                 print("RED Circle")  # Useless
             circles = np.uint16(np.around(circles))
-        return cimg
+        # return cimg
 
     def image_callback(self, msg):
         color_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -161,9 +161,9 @@ class Follower:
             color_img, dsize=(self.width, self.height), interpolation=cv2.INTER_AREA
         )
 
-        if light_state == False:  # Red Light
+        if self.light_state is False:  # Red Light
             hsv = cv2.cvtColor(color_img, cv2.COLOR_BGR2HSV)
-            sen = 15
+            sen = 10
             lower_green = np.array([48 - sen, 100, 100])
             upper_green = np.array([65 + sen, 255, 255])
             green_range = cv2.inRange(hsv, lower_green, upper_green)
@@ -171,128 +171,229 @@ class Follower:
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             green_res = cv2.morphologyEx(green_res, cv2.MORPH_OPEN, kernel)
             green_res = cv2.dilate(green_res, kernel, iterations=5)
-            green_result = self.find_circle(green_res, 1)
+            self.find_circle(green_res, 1)
             # cv2.imshow('green', green_res)
+            # cv2.waitKey(1)
 
         else:  # Green Light
             self.remove_yellow(color_img)
-            blue, green, red = cv2.split(color_img)
-            # perspective transform
-            roi = cv2.warpPerspective(red, self.M, (self.width, self.height))
-            # debugging
-            # cv2.imshow("dst", img_result)
-
-            roi[: int(self.height / 4), :] = 0
-            roi[int(self.height * 3 / 4) :, :] = 0
-
-            # Opening
-            roi = cv2.morphologyEx(
-                roi, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            _, _, img_red = cv2.split(color_img)
+            img_red = cv2.morphologyEx(
+                img_red,
+                cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
             )
+            img_red = cv2.warpPerspective(img_red, self.M, (self.width, self.height))
+            img_red[: int(self.height / 4), : int(self.width)] = 0
+            img_red[int(self.width * 3 / 4) : self.width, : int(self.width)] = 0
 
-            # Canny Edge
+            image = cv2.warpPerspective(color_img, self.M, (300, 300))  # img_size
+            ###
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-            dst = cv2.Canny(roi, 40, 200, None, 3)
+            lower_red1 = np.array([0, 50, 50])
+            upper_red1 = np.array([15, 255, 255])
+            lower_red2 = np.array([160, 50, 50])
+            upper_red2 = np.array([180, 255, 255])
+            maskr1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            maskr2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            maskr = cv2.add(maskr1, maskr2)
 
-            # get hough line
-            linesP = cv2.HoughLinesP(dst, 1, np.pi / 180, 4, None, 22, 2)
+            rgb_yb = cv2.bitwise_and(image, image, mask=maskr).astype(np.uint8)
+            rgb_yb = cv2.cvtColor(rgb_yb, cv2.COLOR_RGB2GRAY)
 
-            slope_pos = np.empty((0.0, 0.0))
-            slope_neg = np.empty((0.0, 0.0))
+            # filter mask
+            kernel = np.ones((7, 7), np.uint8)
+            opening = cv2.morphologyEx(rgb_yb, cv2.MORPH_OPEN, kernel)
+            rgb_yb2 = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel)
+            _, rgb_yb2 = cv2.threshold(rgb_yb2, 70, 255, cv2.THRESH_BINARY)
 
-            right_count = 0
-            left_count = 0
+            # ROI
+            out_img = rgb_yb2.copy()
+            h, w = out_img.shape
+            search_top = int(1 * h / 4 + 20)
+            search_bot = int(3 * h / 4 + 20)
+            search_mid = int(w / 2)
+            out_img[:search_top, :w] = 0
+            out_img[search_bot:h, :w] = 0
 
-            # transfrom gray to BGR
-            dst = cv2.cvtColor(dst, cv2.COLOR_GRAY2BGR)
+            M = cv2.moments(out_img)
+            out_img = cv2.cvtColor(out_img, cv2.COLOR_GRAY2BGR)
+            cxm = int(self.width / 2)
+            if M["m00"] > 0:  # momentum
+                cxm = int(M["m10"] / M["m00"])
+                cym = int(M["m01"] / M["m00"])
+                # cx = cxm - 110 #120#143 #CW
+                # cx = cxm - 150
+                offset = self.get_obstacle_threshold()
+                # print("offset: ", offset)
+                cx = cxm  # - offset
 
-            if linesP:
-                for i in range(len(linesP)):
-                    line = linesP[i][0]
-                    if line[2] - line[0]:
-                        # get line's slope (degree)
-                        slope = (
-                            np.arctan(((line[1] - line[3]) / (line[2] - line[0])))
-                            / np.pi
-                            * 180
-                        )
+                cv2.circle(out_img, (cxm, cym), 20, (255, 0, 0), -1)
+                cv2.circle(out_img, (cx, cym), 20, (255, 0, 0), 2)
 
-                        draw_line = lambda c: cv2.line(
-                            dst,
-                            (line[0], line[1]),
-                            (line[2], line[3]),
-                            c,
-                            3,
-                            cv2.LINE_AA,
-                        )
+                cx = cxm
+                err = cx - (self.width / 2)
+                self.dt = rospy.get_time() - self.ptime
+                K_p = 0.0027
+                K_d = 0.0005
 
-                        if slope >= 5:
-                            draw_line((0, 255, 255))
-                            slope_pos = np.append(slope_pos, slope)
-                            right_count += 1
+                ang_z = (
+                    err * K_p + (err - self.perr) / self.dt * K_d
+                )  # + (self.serr*self.dt)*0.0002
+                ang_z = min(0.8, max(-0.8, ang_z))
+                lin_x = 1 * (1 - 0.5 * abs(ang_z))
 
-                        elif slope <= -5:
-                            draw_line((0, 255, 0))
-                            slope_neg = np.append(slope_neg, slope)
-                            left_count += 1
+                self.twist.linear.x = lin_x  # lin_x  # lin_x  # lin_x
+                self.twist.angular.z = -ang_z
+                self.perr = err
+                self.ptime = rospy.get_time()
+                self.serr = err + self.serr
+                # cv2.imshow('out_img', out_img)
+                # cv2.waitKey(1)
 
-            if slope_pos.size == 0:
-                slope_pos = 90.0
-            if slope_neg.size == 0:
-                slope_neg = -90.0
-
-            right_steer = 90 - np.mean(slope_pos)
-            left_steer = -90 - np.mean(slope_neg)
-
-            right_steer = min(right_steer, 45)
-            left_steer = -min(left_steer, 45)
-
-            if right_count > left_count:
-                steer_angle = right_steer
+                self.cmd_vel_pub.publish(self.twist)
             else:
-                steer_angle = left_steer
+                _, img_red = cv2.threshold(img_red, 210, 255, cv2.THRESH_BINARY)
 
-            print(steer_angle)
+                dst = cv2.Canny(img_red, 40, 200, None, 3)
 
-            # draw steering angle for debugging
-            self.draw_direction(dst, steer_angle)
+                # get hough line
+                linesP = cv2.HoughLinesP(dst, 1, np.pi / 180, 4, None, 22, 2)
 
-            # debugging
-            # cv2.imshow("dst", dst)
-            # cv2.waitKey(1)
+                slope_pos = np.empty((0, 0), dtype=float)
+                slope_neg = np.empty((0, 0), dtype=float)
 
-            if steer_angle == 0:
-                steer_angle = self.past_ang
-                print("No lane")
-            else:
-                self.past_ang = steer_angle
+                right_count = 0
+                left_count = 0
 
-            # moment
-            M = cv2.moments(roi)
-            if M["m00"] > 0:
-                cX = M["m10"] / M["m00"]
-            else:
-                cX = self.width / 2
+                # transfrom gray to BGR
+                dst = cv2.cvtColor(dst, cv2.COLOR_GRAY2BGR)
+                if linesP is not None:
+                    for i in range(0, len(linesP)):
+                        l = linesP[i][0]
+                        if l[2] - l[0] != 0:
+                            # get line's slope (degree)
+                            slope = (
+                                np.arctan(((l[1] - l[3]) / (l[2] - l[0]))) / np.pi * 180
+                            )
 
-            err = cX
-            err += steer_angle
-            err -= self.get_obstacle_threshold()
-            err /= 2
+                            if slope >= 5:
+                                cv2.line(
+                                    out_img,
+                                    (l[0], l[1]),
+                                    (l[2], l[3]),
+                                    (0, 255, 255),
+                                    3,
+                                    cv2.LINE_AA,
+                                )
+                                slope_pos = np.append(slope_pos, slope)
+                                right_count = right_count + 1
 
-            K_p = 0.009
-            K_d = 0.2
+                            elif slope <= -5:
+                                cv2.line(
+                                    out_img,
+                                    (l[0], l[1]),
+                                    (l[2], l[3]),
+                                    (0, 255, 0),
+                                    3,
+                                    cv2.LINE_AA,
+                                )
+                                slope_neg = np.append(slope_neg, slope)
+                                left_count = left_count + 1
 
-            self.dt = rospy.get_time() - self.ptime
+                if slope_pos.size == 0:
+                    slope_pos = 90.0
+                if slope_neg.size == 0:
+                    slope_neg = -90.0
 
-            ang_z = err * K_p + (err - self.perr) / self.dt * K_d
+                right_steer = 90 - np.mean(slope_pos)
+                left_steer = -90 - np.mean(slope_neg)
 
-            self.twist.angular.z = -min(0.6, max(-0.6, ang_z))
-            self.twist.linear.x = 0.8 * (1 - abs(ang_z))
+                if right_steer > 45:
+                    right_steer = 45.01
+                if left_steer > 45:
+                    left_steer = -45
 
-            self.perr = err
-            self.ptime = rospy.get_time()
+                if right_count > left_count:
+                    steer_angle = right_steer
+                else:
+                    steer_angle = left_steer
+                rad_steer_angle = steer_angle / 180 * np.pi
 
-            self.cmd_vel_pub.publish(self.twist)
+                # draw steering angle
+                cv2.line(
+                    out_img,
+                    (int(self.width / 2), int(self.height / 2)),
+                    ((int(self.width / 2), int(self.height / 2) - 150)),
+                    (244, 5, 52),
+                    3,
+                )
+                cv2.line(
+                    out_img,
+                    (int(self.width / 2), int(self.height / 2)),
+                    (
+                        int(self.width / 2 + 100 * (np.sin((rad_steer_angle)))),
+                        int(self.height / 2 - 100 * ((np.cos(rad_steer_angle)))),
+                    ),
+                    (0, 125, 255),
+                    5,
+                )
+                cv2.circle(
+                    out_img,
+                    (
+                        int(self.width / 2 + 100 * (np.sin((rad_steer_angle)))),
+                        int(self.height / 2 - 100 * ((np.cos(rad_steer_angle)))),
+                    ),
+                    10,
+                    (0, 125, 255),
+                    -1,
+                )
+                cv2.putText(
+                    out_img,
+                    str(steer_angle),
+                    (int(self.width / 2 + 10), int(self.height / 2 + 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 255),
+                )
+
+                if steer_angle == 0:
+                    steer_angle = self.past_ang
+                    print("No lane")
+                else:
+                    past_ang = steer_angle
+                # cx = int((width / 2 + steer_angle)+cxm)/2  # - self.get_obstacle_threshold()
+
+                # draw steering angle for debugging
+                self.draw_direction(dst, steer_angle)
+
+                if steer_angle == 0:
+                    steer_angle = self.past_ang
+                    print("No lane")
+                else:
+                    self.past_ang = steer_angle
+
+                # cx = int((self.width / 2 + 7*steer_angle))
+                cx = int(self.width / 2 + steer_angle)
+                err = cx - (self.width / 2)
+                self.dt = rospy.get_time() - self.ptime
+                K_p = 1
+                # K_d = 0.0006
+
+                ang_z = err * K_p  # + (err - self.perr) / self.dt * K_d
+                ang_z = min(0.8, max(-0.8, ang_z))
+                lin_x = 0.8 * (1 - abs(ang_z))
+
+                self.twist.linear.x = 0.2  # lin_x  # lin_x
+                self.twist.angular.z = -ang_z
+                self.perr = err
+                self.ptime = rospy.get_time()
+                # cv2.imshow('out_img', out_img)
+                cv2.waitKey(1)
+
+                self.cmd_vel_pub.publish(self.twist)
 
 
 rospy.init_node("follower")
